@@ -8,8 +8,8 @@ const createRedisDataLoader = require('../index');
 
 const mapPromise = (promise, fn) => Promise.all(promise.map(fn));
 
-module.exports = ({ name, redis }) => {
-  const RedisDataLoader = createRedisDataLoader({ redis });
+module.exports = ({ name, redis, redis_ro }) => {
+  const RedisDataLoader = createRedisDataLoader({ redis, redis_ro });
 
   describe(name, () => {
     beforeEach(() => {
@@ -25,7 +25,7 @@ module.exports = ({ name, redis }) => {
 
       this.rGet = k =>
         new Promise((resolve, reject) => {
-          redis.get(k, (err, resp) => (err ? reject(err) : resolve(resp)));
+          redis_ro.get(k, (err, resp) => (err ? reject(err) : resolve(resp)));
         });
 
       this.keySpace = 'key-space';

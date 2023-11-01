@@ -6,80 +6,89 @@ const mapPromise = (promise, fn) => Promise.all(promise.map(fn));
 
 module.exports = fig => {
   const redis = fig.redis;
-  const isIORedis = redis.constructor.name !== 'RedisClient';
+  const redis_ro = fig.redis_ro;
+  const isIORedis = redis_ro.constructor.name !== 'RedisClient';
 
-  const parse = (resp, opt) =>
-    new Promise((resolve, reject) => {
+  const parse = async (resp, opt) => {
       try {
         if (resp === '' || resp === null) {
-          resolve(resp);
+          return(resp);
         } else if (opt.deserialize) {
-          resolve(opt.deserialize(resp));
+          return opt.deserialize(resp);
         } else {
           if (Buffer.isBuffer(resp)) {
             resp = resp.toString();
           }
-          resolve(JSON.parse(resp));
+          return JSON.parse(resp);
         }
       } catch (err) {
-        reject(err);
+        throw new Error(err);
       }
-    });
+    };
 
-  const toString = (val, opt) => {
+  const toString = async (val, opt) => {
     if (val === null) {
-      return Promise.resolve('');
+      return '';
     } else if (opt.serialize) {
-      return Promise.resolve(opt.serialize(val));
+      return opt.serialize(val);
     } else if (_.isObject(val)) {
-      return Promise.resolve(JSON.stringify(val));
+      return JSON.stringify(val);
     } else {
-      return Promise.reject(new Error('Must be Object or Null'));
+      throw new Error('Must be Object or Null');
     }
   };
 
   const makeKey = (keySpace, key, cacheKeyFn) =>
     `${keySpace ? keySpace + ':' : ''}${cacheKeyFn(key)}`;
 
-  const rSetAndGet = (keySpace, key, rawVal, opt) =>
-    toString(rawVal, opt).then(
-      val =>
-        new Promise((resolve, reject) => {
-          const fullKey = makeKey(keySpace, key, opt.cacheKeyFn);
-          const multi = redis.multi();
-          multi.set(fullKey, val);
-          if (opt.expire) {
-            multi.expire(fullKey, opt.expire);
-          }
-          if (opt.buffer) {
-            multi.getBuffer(fullKey);
-          } else {
-            multi.get(fullKey);
-          }
-          multi.exec((err, replies) => {
-            const lastReply = isIORedis
-              ? _.last(_.last(replies))
-              : _.last(replies);
+  const rSetAndGet = async (keySpace, key, rawVal, opt) => {
+      const val = await toString(rawVal, opt);
 
-            return err ? reject(err) : parse(lastReply, opt).then(resolve);
-          });
-        })
-    );
+      const fullKey = makeKey(keySpace, key, opt.cacheKeyFn);
+      redis.set(fullKey, val);
+      const multi = redis_ro.multi();
+      if (opt.expire) {
+        multi.expire(fullKey, opt.expire);
+      }
+      if (opt.buffer) {
+        multi.getBuffer(fullKey);
+      } else {
+        multi.get(fullKey);
+      }
 
-  const rGet = (keySpace, key, opt) =>
-    new Promise((resolve, reject) =>
-      (opt.buffer ? redis.getBuffer : redis.get)(
+      return await new Promise((resolve, reject) => {
+          multi.exec(async (err, replies) => {
+          if(err) {
+            reject(err);
+          }
+
+          const lastReply = isIORedis
+            ? _.last(_.last(replies))
+            : _.last(replies);
+
+          const parsedValue = await parse(lastReply, opt)
+          resolve(parsedValue);
+        });
+      });
+  }
+
+  const rGet = async (keySpace, key, opt) =>
+      (opt.buffer ? redis_ro.getBuffer : redis_ro.get)(
         makeKey(keySpace, key, opt.cacheKeyFn),
-        (err, result) => (err ? reject(err) : parse(result, opt).then(resolve))
-      )
-    );
+        async (err, result) => {
+          if(err) {
+            throw new Error();
+          }
+          await parse(result, opt);
+        }
+      );
 
   const rMGet = (keySpace, keys, opt) => {
     if (opt.buffer) {
       // Have to use multi.getBuffer instead of mgetBuffer
       // because mgetBuffer throws an error.
       return new Promise((resolve, reject) => {
-        let multi = redis.pipeline();
+        let multi = redis_ro.pipeline();
         for (const key of keys) {
           multi = multi.getBuffer(makeKey(keySpace, key, opt.cacheKeyFn));
         }
@@ -104,12 +113,15 @@ module.exports = fig => {
     }
   }
 
-  const rDel = (keySpace, key, opt) =>
-    new Promise((resolve, reject) =>
-      redis.del(
-        makeKey(keySpace, key, opt.cacheKeyFn),
-        (err, resp) => (err ? reject(err) : resolve(resp))
-      )
+  const rDel = async (keySpace, key, opt) =>
+    redis.del(
+      makeKey(keySpace, key, opt.cacheKeyFn),
+      async (err, resp) => {
+        if(err) {
+          throw new Error();
+        }
+       return resp;
+      }
     );
 
   return class RedisDataLoader {
