@@ -9,22 +9,22 @@ module.exports = fig => {
   const redis_ro = fig.redis_ro;
   const isIORedis = redis_ro.constructor.name !== 'RedisClient';
 
-  const parse = async (resp, opt) => {
-      try {
-        if (resp === '' || resp === null) {
-          return(resp);
-        } else if (opt.deserialize) {
-          return opt.deserialize(resp);
-        } else {
-          if (Buffer.isBuffer(resp)) {
-            resp = resp.toString();
-          }
-          return JSON.parse(resp);
+  const parse = (resp, opt) => {
+    try {
+      if (resp === '' || resp === null) {
+        return(resp);
+      } else if (opt.deserialize) {
+        return opt.deserialize(resp);
+      } else {
+        if (Buffer.isBuffer(resp)) {
+          resp = resp.toString();
         }
-      } catch (err) {
-        throw new Error(err);
+        return JSON.parse(resp);
       }
-    };
+    } catch (err) {
+      throw new Error(err);
+    }
+  };
 
   const toString = async (val, opt) => {
     if (val === null) {
@@ -42,48 +42,47 @@ module.exports = fig => {
     `${keySpace ? keySpace + ':' : ''}${cacheKeyFn(key)}`;
 
   const rSetAndGet = async (keySpace, key, rawVal, opt) => {
-      const val = await toString(rawVal, opt);
+    const val = await toString(rawVal, opt);
+    if(_.isEmpty(val)) {
+      return;
+    }
+    const fullKey = makeKey(keySpace, key, opt.cacheKeyFn);
+    await redis.set(fullKey, val);
+    const multi = redis_ro.multi();
+    if (opt.expire) {
+      multi.expire(fullKey, opt.expire);
+    }
+    if (opt.buffer) {
+      multi.getBuffer(fullKey);
+    } else {
+      multi.get(fullKey);
+    }
+    try {
+      const replies = await multi.exec();
 
-      const fullKey = makeKey(keySpace, key, opt.cacheKeyFn);
-      redis.set(fullKey, val);
-      const multi = redis_ro.multi();
-      if (opt.expire) {
-        multi.expire(fullKey, opt.expire);
-      }
-      if (opt.buffer) {
-        multi.getBuffer(fullKey);
-      } else {
-        multi.get(fullKey);
-      }
+      const lastReply = isIORedis
+      ? _.last(_.last(replies))
+      : _.last(replies);
 
-      return await new Promise((resolve, reject) => {
-          multi.exec(async (err, replies) => {
-          if(err) {
-            reject(err);
-          }
-
-          const lastReply = isIORedis
-            ? _.last(_.last(replies))
-            : _.last(replies);
-
-          const parsedValue = await parse(lastReply, opt)
-          resolve(parsedValue);
-        });
-      });
+      const parsedValue = parse(lastReply, opt)
+      return parsedValue;
+    } catch(err) {
+      throw new Error(err);
+    }
   }
 
   const rGet = async (keySpace, key, opt) =>
-      (opt.buffer ? redis_ro.getBuffer : redis_ro.get)(
-        makeKey(keySpace, key, opt.cacheKeyFn),
-        async (err, result) => {
-          if(err) {
-            throw new Error();
-          }
-          await parse(result, opt);
+    (opt.buffer ? redis_ro.getBuffer : redis_ro.get)(
+      makeKey(keySpace, key, opt.cacheKeyFn),
+      async (err, result) => {
+        if (err) {
+          throw new Error();
         }
-      );
+        await parse(result, opt);
+      }
+    );
 
-  const rMGet = (keySpace, keys, opt) => {
+  const rMGet = async (keySpace, keys, opt) => {
     if (opt.buffer) {
       // Have to use multi.getBuffer instead of mgetBuffer
       // because mgetBuffer throws an error.
@@ -100,107 +99,105 @@ module.exports = fig => {
         });
       });
     } else {
-      return new Promise((resolve, reject) =>
-        redis.mget(
-          _.map(keys, k => makeKey(keySpace, k, opt.cacheKeyFn)),
-          (err, results) => {
-            return err
-              ? reject(err)
-              : mapPromise(results, r => parse(r, opt)).then(resolve);
-          }
-        )
-      );
+      try {
+          const madeKeys = _.map(keys, k => makeKey(keySpace, k, opt.cacheKeyFn));
+          const results = await redis.mGet(madeKeys);
+          const parsedResults = results.map((result) => parse(result, opt));
+          return parsedResults;
+      } catch (err) {
+        console.log(err);
+      }
     }
   }
 
-  const rDel = async (keySpace, key, opt) =>
-    redis.del(
-      makeKey(keySpace, key, opt.cacheKeyFn),
-      async (err, resp) => {
-        if(err) {
-          throw new Error();
+    const rDel = async (keySpace, key, opt) =>
+      redis.del(
+        makeKey(keySpace, key, opt.cacheKeyFn),
+        async (err, resp) => {
+          if (err) {
+            throw new Error();
+          }
+          return resp;
         }
-       return resp;
-      }
-    );
-
-  return class RedisDataLoader {
-    constructor(ks, userLoader, opt) {
-      const customOptions = [
-        'expire',
-        'serialize',
-        'deserialize',
-        'cacheKeyFn',
-        'buffer'
-      ];
-      this.opt = _.pick(opt, customOptions) || {};
-      this.opt.cacheKeyFn =
-        this.opt.cacheKeyFn || (k => (_.isObject(k) ? stringify(k) : k));
-      if (this.opt.buffer && !isIORedis) {
-        throw new Error('opt.buffer can only be used with ioredis');
-      }
-      this.keySpace = ks;
-      this.loader = new DataLoader(
-        keys =>
-          rMGet(this.keySpace, keys, this.opt).then(results =>
-            mapPromise(results, (v, i) => {
-              if (v === '') {
-                return Promise.resolve(null);
-              } else if (v === null) {
-                return userLoader
-                  .load(keys[i])
-                  .then(resp =>
-                    rSetAndGet(this.keySpace, keys[i], resp, this.opt)
-                  )
-                  .then(r => (r === '' ? null : r));
-              } else {
-                return Promise.resolve(v);
-              }
-            })
-          ),
-        _.chain(opt)
-          .omit(customOptions)
-          .extend({ cacheKeyFn: this.opt.cacheKeyFn })
-          .value()
       );
-    }
 
-    load(key) {
-      return key
-        ? Promise.resolve(this.loader.load(key))
-        : Promise.reject(new TypeError('key parameter is required'));
-    }
-
-    loadMany(keys) {
-      return keys
-        ? Promise.resolve(Promise.all(keys.map((k) => this.loader.load(k))))
-        : Promise.reject(new TypeError('keys parameter is required'));
-    }
-
-    prime(key, val) {
-      if (!key) {
-        return Promise.reject(new TypeError('key parameter is required'));
-      } else if (val === undefined) {
-        return Promise.reject(new TypeError('value parameter is required'));
-      } else {
-        return rSetAndGet(this.keySpace, key, val, this.opt).then(r => {
-          this.loader.clear(key).prime(key, r === '' ? null : r);
-        });
+    return class RedisDataLoader {
+      constructor(ks, userLoader, opt) {
+        const customOptions = [
+          'expire',
+          'serialize',
+          'deserialize',
+          'cacheKeyFn',
+          'buffer'
+        ];
+        this.opt = _.pick(opt, customOptions) || {};
+        this.opt.cacheKeyFn =
+          this.opt.cacheKeyFn || (k => (_.isObject(k) ? stringify(k) : k));
+        if (this.opt.buffer && !isIORedis) {
+          throw new Error('opt.buffer can only be used with ioredis');
+        }
+        this.keySpace = ks;
+        this.loader = new DataLoader(
+          keys =>
+            rMGet(this.keySpace, keys, this.opt).then(results =>
+              mapPromise(results, (v, i) => {
+                if (v === '') {
+                  return Promise.resolve(null);
+                } else if (v === null) {
+                  return userLoader
+                    .load(keys[i])
+                    .then(resp =>
+                      rSetAndGet(this.keySpace, keys[i], resp, this.opt)
+                    )
+                    .then(r => (r === '' ? null : r));
+                } else {
+                  return Promise.resolve(v);
+                }
+              })
+            ),
+          _.chain(opt)
+            .omit(customOptions)
+            .extend({ cacheKeyFn: this.opt.cacheKeyFn })
+            .value()
+        );
       }
-    }
 
-    clear(key) {
-      return key
-        ? rDel(this.keySpace, key, this.opt).then(() => this.loader.clear(key))
-        : Promise.reject(new TypeError('key parameter is required'));
-    }
+      load(key) {
+        return key
+          ? Promise.resolve(this.loader.load(key))
+          : Promise.reject(new TypeError('key parameter is required'));
+      }
 
-    clearAllLocal() {
-      return Promise.resolve(this.loader.clearAll());
-    }
+      loadMany(keys) {
+        return keys
+          ? Promise.resolve(Promise.all(keys.map((k) => this.loader.load(k))))
+          : Promise.reject(new TypeError('keys parameter is required'));
+      }
 
-    clearLocal(key) {
-      return Promise.resolve(this.loader.clear(key));
-    }
+      prime(key, val) {
+        if (!key) {
+          return Promise.reject(new TypeError('key parameter is required'));
+        } else if (val === undefined) {
+          return Promise.reject(new TypeError('value parameter is required'));
+        } else {
+          return rSetAndGet(this.keySpace, key, val, this.opt).then(r => {
+            this.loader.clear(key).prime(key, r === '' ? null : r);
+          });
+        }
+      }
+
+      clear(key) {
+        return key
+          ? rDel(this.keySpace, key, this.opt).then(() => this.loader.clear(key))
+          : Promise.reject(new TypeError('key parameter is required'));
+      }
+
+      clearAllLocal() {
+        return Promise.resolve(this.loader.clearAll());
+      }
+
+      clearLocal(key) {
+        return Promise.resolve(this.loader.clear(key));
+      }
+    };
   };
-};
