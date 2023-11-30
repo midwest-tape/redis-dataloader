@@ -105,7 +105,7 @@ module.exports = fig => {
           const parsedResults = results.map((result) => parse(result, opt));
           return parsedResults;
       } catch (err) {
-        console.log(err);
+        throw new Error(err);
       }
     }
   }
