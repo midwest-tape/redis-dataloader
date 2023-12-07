@@ -47,22 +47,33 @@ module.exports = fig => {
       return;
     }
     const fullKey = makeKey(keySpace, key, opt.cacheKeyFn);
+
     await redis.set(fullKey, val);
-    const multi = redis_ro.multi();
+
+    const multi_rw = redis.multi();
+
+    multi_rw.set(fullKey, val);
     if (opt.expire) {
-      multi.expire(fullKey, opt.expire);
+      multi_rw.expire(fullKey, opt.expire);
     }
+
+    await multi_rw.exec();
+
+    const multi_ro = redis_ro.multi();
     if (opt.buffer) {
-      multi.getBuffer(fullKey);
+      multi_ro.getBuffer(fullKey);
     } else {
-      multi.get(fullKey);
+      multi_ro.get(fullKey);
     }
     try {
-      const replies = await multi.exec();
-
-      const lastReply = isIORedis
-      ? _.last(_.last(replies))
-      : _.last(replies);
+      const replies = await multi_ro.exec();
+      
+      let lastReply;
+      if(_.isArray(replies[0])) {
+        lastReply = _.last(_.last(replies));
+      } else {
+        lastReply = _.last(replies);
+      }
 
       const parsedValue = parse(lastReply, opt)
       return parsedValue;
@@ -101,11 +112,11 @@ module.exports = fig => {
     } else {
       try {
           const madeKeys = _.map(keys, k => makeKey(keySpace, k, opt.cacheKeyFn));
-          const results = await redis.mGet(madeKeys);
+          const results = await redis_ro.mGet(madeKeys);
           const parsedResults = results.map((result) => parse(result, opt));
           return parsedResults;
       } catch (err) {
-        throw new Error(err);
+        console.log(err);
       }
     }
   }
