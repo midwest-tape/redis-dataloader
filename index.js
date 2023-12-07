@@ -48,8 +48,6 @@ module.exports = fig => {
     }
     const fullKey = makeKey(keySpace, key, opt.cacheKeyFn);
 
-    await redis.set(fullKey, val);
-
     const multi_rw = redis.multi();
 
     multi_rw.set(fullKey, val);
