@@ -4,7 +4,7 @@ chai.use(require('chai-as-promised'));
 const { expect } = chai;
 const sinon = require('sinon');
 const DataLoader = require('dataloader');
-const createRedisDataLoader = require('../index');
+const createRedisDataLoader = require('../src');
 
 const mapPromise = (promise, fn) => Promise.all(promise.map(fn));
 
