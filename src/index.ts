@@ -75,6 +75,8 @@ export function createRedisDataLoader(config: RedisDataLoaderConfig) {
       multiRW.expire(fullKey, opt.expire)
     }
 
+    await multiRW.exec()
+
     multiRO.get(fullKey)
 
     const replies = await multiRO.exec()
