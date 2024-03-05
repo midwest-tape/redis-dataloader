@@ -7,7 +7,7 @@ export interface RedisDataLoaderConfig {
 export interface RedisDataLoaderOptions extends DataLoader.Options<any, any> {
     expire: number;
 }
-export interface RedisDataLoader {
+export interface IRedisDataLoader {
     options: RedisDataLoaderOptions;
     keySpace: string;
     loader: DataLoader<any, any>;
@@ -15,6 +15,8 @@ export interface RedisDataLoader {
     loadMany<T>(keys: string[]): Promise<T[]>;
     prime(key: string, val: object | null | undefined): Promise<void>;
     clear(key: string): Promise<DataLoader<any, any, any>>;
+    clearAllLocal(): Promise<DataLoader<any, any, any>>;
+    clearLocal(key: string): Promise<DataLoader<any, any, any>>;
 }
 export declare function createRedisDataLoader(config: RedisDataLoaderConfig): {
     new (ks: string, userLoader: DataLoader<any, any>, opt: RedisDataLoaderOptions): {
