@@ -15,7 +15,7 @@ export interface RedisDataLoaderOptions extends DataLoader.Options<any, any> {
   expire: number
 }
 
-export interface RedisDataLoader {
+export interface IRedisDataLoader {
   options: RedisDataLoaderOptions
   keySpace: string
   loader: DataLoader<any, any>
@@ -27,6 +27,10 @@ export interface RedisDataLoader {
   prime(key: string, val: object | null | undefined): Promise<void>
 
   clear(key: string): Promise<DataLoader<any, any, any>>
+
+  clearAllLocal(): Promise<DataLoader<any, any, any>>;
+
+  clearLocal(key: string): Promise<DataLoader<any, any, any>>;
 }
 
 export function createRedisDataLoader(config: RedisDataLoaderConfig) {
@@ -34,7 +38,7 @@ export function createRedisDataLoader(config: RedisDataLoaderConfig) {
   const redisRO = config.redisRO
 
   function parse(resp: RedisCommandRawReply): null | string | object {
-    if (resp === null) {
+    if (resp === '' || resp === null) {
       return null
     } else if (Buffer.isBuffer(resp)) {
       return resp.toString()
@@ -101,7 +105,7 @@ export function createRedisDataLoader(config: RedisDataLoaderConfig) {
     await redisRW.del(cacheKey)
   }
 
-  return class RedisDataLoader {
+  return class RedisDataLoader implements IRedisDataLoader {
     options: RedisDataLoaderOptions
     keySpace: string
     loader: DataLoader<any, any>
