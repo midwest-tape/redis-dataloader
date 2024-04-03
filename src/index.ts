@@ -15,6 +15,11 @@ export interface RedisDataLoaderOptions extends DataLoader.Options<any, any> {
   expire: number
 }
 
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message
+  return String(error)
+}
+
 export interface IRedisDataLoader {
   options: RedisDataLoaderOptions
   keySpace: string
@@ -36,6 +41,11 @@ export interface IRedisDataLoader {
 export function createRedisDataLoader(config: RedisDataLoaderConfig) {
   const redisRW = config.redisRW
   const redisRO = config.redisRO
+
+  function isReplicaLoadingDataError(exception: unknown) {
+    const errorMessage = getErrorMessage(exception)
+    return errorMessage.includes('LOADING')
+  }
 
   function parse(resp: RedisCommandRawReply): null | string | object {
     if (resp === '' || resp === null) {
@@ -71,7 +81,6 @@ export function createRedisDataLoader(config: RedisDataLoaderConfig) {
     const fullKey = makeKey(keySpace, key, opt.cacheKeyFn)
 
     const multiRW = redisRW.multi()
-    const multiRO = redisRO.multi()
 
     multiRW.set(fullKey, val)
 
@@ -81,12 +90,23 @@ export function createRedisDataLoader(config: RedisDataLoaderConfig) {
 
     await multiRW.exec()
 
-    multiRO.get(fullKey)
-
-    const replies = await multiRO.exec()
-
-    const lastReply = _.last(replies)
-    return parse(lastReply)
+    try {
+      const multiRO = redisRO.multi()
+      multiRO.get(fullKey)
+      const replies = await multiRO.exec()
+      const lastReply: string | number | Buffer | Array<RedisCommandRawReply> | undefined | null = _.last(replies)
+      return parse(lastReply)
+    } catch (ex) {
+      if (isReplicaLoadingDataError(ex)) {
+        // this replica is reloading from disc and not ready for work. retry
+        // loading these keys from the primary instead.
+        multiRW.get(fullKey)
+        const replies = await multiRW.exec()
+        const lastReply: string | number | Buffer | Array<RedisCommandRawReply> | undefined | null = _.last(replies)
+        return parse(lastReply)
+      }
+      throw ex
+    }
   }
 
   // const rGet = async (keySpace: string, key: string, opt: RedisDataLoaderOptions) => {
@@ -96,8 +116,19 @@ export function createRedisDataLoader(config: RedisDataLoaderConfig) {
 
   async function rMGet(keySpace: string, keys: readonly string[], opt: RedisDataLoaderOptions) {
     const cacheKeys = _.map(keys, (k) => makeKey(keySpace, k, opt.cacheKeyFn)) as any
-    const results = await redisRO.mGet(cacheKeys)
-    return results.map((result) => parse(result))
+
+    try {
+      const results = await redisRO.mGet(cacheKeys)
+      return results.map((result) => parse(result))
+    } catch (ex) {
+      if (isReplicaLoadingDataError(ex)) {
+        // this replica is reloading from disc and not ready for work. retry
+        // loading these keys from the primary instead.
+        const results = await redisRW.mGet(cacheKeys)
+        return results.map((result) => parse(result))
+      }
+      throw ex
+    }
   }
 
   async function rDel(keySpace: string, key: string, opt: RedisDataLoaderOptions) {
@@ -129,7 +160,9 @@ export function createRedisDataLoader(config: RedisDataLoaderConfig) {
               .then((resp) => {
                 return rSetAndGet(this.keySpace, keys[index], resp, this.options)
               })
-              .then((r) => { return r === '' || _.isUndefined(r) ? null : r })
+              .then((r) => {
+                return Promise.resolve(r === '' || _.isUndefined(r) ? null : r)
+              })
           } else {
             return Promise.resolve(result)
           }
