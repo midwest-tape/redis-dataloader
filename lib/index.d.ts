@@ -8,7 +8,7 @@ export interface RedisDataLoaderOptions extends DataLoader.Options<any, any> {
     expire: number;
 }
 export interface IRedisDataLoader {
-    options: RedisDataLoaderOptions;
+    options?: RedisDataLoaderOptions;
     keySpace: string;
     loader: DataLoader<any, any>;
     load<T>(key: string): Promise<T>;

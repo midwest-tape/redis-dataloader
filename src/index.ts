@@ -21,7 +21,7 @@ function getErrorMessage(error: unknown) {
 }
 
 export interface IRedisDataLoader {
-  options: RedisDataLoaderOptions
+  options?: RedisDataLoaderOptions
   keySpace: string
   loader: DataLoader<any, any>
 
