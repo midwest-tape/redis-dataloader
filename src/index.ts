@@ -143,8 +143,8 @@ export function createRedisDataLoader(config: RedisDataLoaderConfig) {
     keySpace: string
     loader: DataLoader<any, any>
 
-    constructor(ks: string, userLoader: DataLoader<any, any>, opt: RedisDataLoaderOptions) {
-      this.options = opt
+    constructor(ks: string, userLoader: DataLoader<any, any>, opt?: RedisDataLoaderOptions) {
+      this.options = opt || {} as RedisDataLoaderOptions
 
       this.options.cacheKeyFn = this.options.cacheKeyFn || ((k) => (_.isObject(k) ? stringify(k) : k))
 

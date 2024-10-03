@@ -19,7 +19,7 @@ export interface IRedisDataLoader {
     clearLocal(key: string): Promise<DataLoader<any, any, any>>;
 }
 export declare function createRedisDataLoader(config: RedisDataLoaderConfig): {
-    new (ks: string, userLoader: DataLoader<any, any>, opt: RedisDataLoaderOptions): {
+    new (ks: string, userLoader: DataLoader<any, any>, opt?: RedisDataLoaderOptions): {
         options: RedisDataLoaderOptions;
         keySpace: string;
         loader: DataLoader<any, any>;
