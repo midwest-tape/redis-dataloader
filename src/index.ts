@@ -90,23 +90,25 @@ export function createRedisDataLoader(config: RedisDataLoaderConfig) {
 
     await multiRW.exec()
 
-    try {
-      const multiRO = redisRO.multi()
-      multiRO.get(fullKey)
-      const replies = await multiRO.exec()
-      const lastReply: string | number | Buffer | Array<RedisCommandRawReply> | undefined | null = _.last(replies)
-      return parse(lastReply)
-    } catch (ex) {
-      if (isReplicaLoadingDataError(ex)) {
-        // this replica is reloading from disc and not ready for work. retry
-        // loading these keys from the primary instead.
-        multiRW.get(fullKey)
-        const replies = await multiRW.exec()
-        const lastReply: string | number | Buffer | Array<RedisCommandRawReply> | undefined | null = _.last(replies)
-        return parse(lastReply)
-      }
-      throw ex
-    }
+    // try {
+    //   const multiRO = redisRO.multi()
+    //   multiRO.get(fullKey)
+    //   const replies = await multiRO.exec()
+    //   const lastReply: string | number | Buffer | Array<RedisCommandRawReply> | undefined | null = _.last(replies)
+    //   return parse(lastReply)
+    // } catch (ex) {
+    //   if (isReplicaLoadingDataError(ex)) {
+    //     // this replica is reloading from disc and not ready for work. retry
+    //     // loading these keys from the primary instead.
+    //     multiRW.get(fullKey)
+    //     const replies = await multiRW.exec()
+    //     const lastReply: string | number | Buffer | Array<RedisCommandRawReply> | undefined | null = _.last(replies)
+    //     return parse(lastReply)
+    //   }
+    //   throw ex
+    // }
+
+    return parse(val)
   }
 
   // const rGet = async (keySpace: string, key: string, opt: RedisDataLoaderOptions) => {
