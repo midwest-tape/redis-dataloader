@@ -153,6 +153,8 @@ export function createRedisDataLoader(config: RedisDataLoaderConfig) {
       this.loader = new DataLoader(async (keys: readonly string[]) => {
         const results = await rMGet(this.keySpace, keys, this.options)
 
+        // TODO: collect set commands and run at the end without waiting for a response from redis
+
         return results.map((result, index) => {
           if (result === '') {
             return Promise.resolve(null)
