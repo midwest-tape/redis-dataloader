@@ -6,6 +6,10 @@ import DataLoader from 'dataloader'
 
 import stringify from 'json-stable-stringify'
 
+import debug from 'debug'
+
+const d = debug('redis-dataloader')
+
 export interface RedisDataLoaderConfig {
   redisRW: RedisClientType<any, any, any>
   redisRO: RedisClientType<any, any, any>
@@ -90,25 +94,49 @@ export function createRedisDataLoader(config: RedisDataLoaderConfig) {
 
     await multiRW.exec()
 
-    // try {
-    //   const multiRO = redisRO.multi()
-    //   multiRO.get(fullKey)
-    //   const replies = await multiRO.exec()
-    //   const lastReply: string | number | Buffer | Array<RedisCommandRawReply> | undefined | null = _.last(replies)
-    //   return parse(lastReply)
-    // } catch (ex) {
-    //   if (isReplicaLoadingDataError(ex)) {
-    //     // this replica is reloading from disc and not ready for work. retry
-    //     // loading these keys from the primary instead.
-    //     multiRW.get(fullKey)
-    //     const replies = await multiRW.exec()
-    //     const lastReply: string | number | Buffer | Array<RedisCommandRawReply> | undefined | null = _.last(replies)
-    //     return parse(lastReply)
-    //   }
-    //   throw ex
-    // }
+    try {
+      const multiRO = redisRO.multi()
+      multiRO.get(fullKey)
+      const replies = await multiRO.exec()
+      const lastReply: string | number | Buffer | Array<RedisCommandRawReply> | undefined | null = _.last(replies)
+      return parse(lastReply)
+    } catch (ex) {
+      if (isReplicaLoadingDataError(ex)) {
+        // this replica is reloading from disc and not ready for work. retry
+        // loading these keys from the primary instead.
+        multiRW.get(fullKey)
+        const replies = await multiRW.exec()
+        const lastReply: string | number | Buffer | Array<RedisCommandRawReply> | undefined | null = _.last(replies)
+        return parse(lastReply)
+      }
+      throw ex
+    }
+  }
 
-    return parse(val)
+  function rPipelineSet(keySpace: string, data: {
+    key: string,
+    rawVal: null | object
+  }[], opt: RedisDataLoaderOptions) {
+    const multiRW = redisRW.multi()
+
+    for (let i = 0; i < data.length; i++) {
+      const item = data[i]
+
+      const val = toString(item.rawVal)
+
+      const fullKey = makeKey(keySpace, item.key, opt.cacheKeyFn)
+
+
+      if (opt.expire) {
+        d('setting redis data', fullKey, `for ${opt.expire}ms`)
+        multiRW.set(fullKey, val, { EX: opt.expire })
+      } else {
+        d('setting redis data', fullKey)
+        multiRW.set(fullKey, val)
+      }
+    }
+
+    return multiRW.execAsPipeline()
   }
 
   // const rGet = async (keySpace: string, key: string, opt: RedisDataLoaderOptions) => {
@@ -153,24 +181,46 @@ export function createRedisDataLoader(config: RedisDataLoaderConfig) {
       this.loader = new DataLoader(async (keys: readonly string[]) => {
         const results = await rMGet(this.keySpace, keys, this.options)
 
-        // TODO: collect set commands and run at the end without waiting for a response from redis
+        const dataToStore: { key: string; rawVal: null | object }[] = []
 
-        return results.map((result, index) => {
+        const fetches: Promise<any>[] = []
+
+        for (let index = 0; index < results.length; index++) {
+          const result = results[index]
+
           if (result === '') {
-            return Promise.resolve(null)
+            d('found -NULL- in redis', keys[index])
+            fetches.push(Promise.resolve(null))
           } else if (result === null) {
-            return userLoader
+            fetches.push(userLoader
               .load(keys[index])
               .then((resp) => {
-                return rSetAndGet(this.keySpace, keys[index], resp, this.options)
+                d('found in user loader', keys[index])
+                dataToStore.push({ key: keys[index], rawVal: resp })
+                return resp
               })
               .then((r) => {
                 return Promise.resolve(r === '' || _.isUndefined(r) ? null : r)
-              })
+              }))
           } else {
-            return Promise.resolve(result)
+            d('found in redis', keys[index])
+            fetches.push(Promise.resolve(result))
           }
-        })
+        }
+
+        const response = await Promise.all(fetches)
+
+        if (dataToStore.length > 0) {
+          // set all data in redis at once without waiting for response from redis
+          rPipelineSet(this.keySpace, dataToStore, this.options).catch((reason) => {
+            // we are catching and not throwing the failure
+            // because we don't want downstream services to
+            // fail if redis does
+            d('redis pipeline setting failed', reason)
+          })
+        }
+
+        return response
       }, _.omit(this.options, ['expire', 'buffer']))
     }
 
