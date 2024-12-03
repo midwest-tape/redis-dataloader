@@ -1,6 +1,6 @@
 {
   "name": "redis-dataloader",
-  "version": "1.7.0",
+  "version": "1.9.0",
   "description": "DataLoader Using Redis as a Cache",
   "main": "index.js",
   "scripts": {
@@ -28,7 +28,7 @@
   "homepage": "https://github.com/midwest-tape/redis-dataloader#readme",
   "dependencies": {
     "@redis/client": "^1.6.0",
-    "dataloader": "^2.2.2",
+    "dataloader": "^2.2.3",
     "debug": "^4.3.7",
     "json-stable-stringify": "^1.0.1",
     "lodash": "^4.17.2",
