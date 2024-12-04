@@ -196,7 +196,9 @@ export function createRedisDataLoader(config: RedisDataLoaderConfig) {
               .load(keys[index])
               .then((resp) => {
                 d('found in user loader', keys[index])
-                dataToStore.push({ key: keys[index], rawVal: resp })
+                if (resp !== '' && !_.isUndefined(resp) && !_.isNull(resp)) {
+                  dataToStore.push({ key: keys[index], rawVal: resp })
+                }
                 return resp
               })
               .then((r) => {
